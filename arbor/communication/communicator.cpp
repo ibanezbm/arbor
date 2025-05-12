@@ -152,6 +152,9 @@ void communicator::update_connections(const recipe& rec,
     auto my_rank = ctx_->distributed->id();
     std::unordered_set<cell_gid_type> repeted_gids;
     std::vector<std::vector<cell_gid_type>> gids_domains(num_domains_);
+    for (auto& v : gids_domains) {
+        v.reserve(gids.size());
+    }
     for (const auto tgt_gid: gids) {
         if(repeted_gids.find(tgt_gid) == repeted_gids.end()){
             gids_domains[my_rank].push_back(tgt_gid);
@@ -202,10 +205,7 @@ void communicator::update_connections(const recipe& rec,
                 .delay=conn.delay,
                 .index_on_domain=iod
             });
-            if(repeted_gids.find(src_gid) == repeted_gids.end()){
-                gids_domains[src_dom].push_back(src_gid);
-                repeted_gids.insert(src_gid);
-            }
+            gids_domains[src_dom].push_back(src_gid);
             ++n_con;
         }
     }
@@ -227,7 +227,6 @@ void communicator::update_connections(const recipe& rec,
         ++n_con;
     }    
     repeted_gids = std::unordered_set<cell_gid_type>();
-
     PL();
     
     std::unordered_map<cell_gid_type, std::vector<cell_size_type>> src_ranks;
@@ -315,6 +314,7 @@ communicator::exchange(std::vector<spike>& local_spikes) {
     // global all-to-all to gather a local copy of the global spike list on each node.
     auto global_spikes = ctx_->distributed->all_to_all_spikes(spikes_per_rank);
     num_spikes_ += global_spikes.size();
+    printf("\nNNUM %ld\n", num_spikes_);
     PL();
 
     // Get remote spikes
