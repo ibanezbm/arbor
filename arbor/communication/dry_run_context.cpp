@@ -101,21 +101,14 @@ struct dry_run_context_impl {
         std::size_t local_size = gids_domains[0].size();
 
         std::vector<cell_gid_type> gathered_gids;
-        gathered_gids.reserve(local_size*num_ranks_);
-
-        for (count_type i = 0; i < num_ranks_; i++) {
-            util::append(gathered_gids, gids_domains[0]);
-        }
-
-        for (count_type i = 0; i < num_ranks_; i++) {
-            for (count_type j = i*local_size; j < (i+1)*local_size; j++){
-                gathered_gids[j] += num_cells_per_tile_*i;
-            }
-        }
-
+        gathered_gids.reserve(local_size);
+	util::append(gathered_gids, gids_domains[0]);
+	
         std::vector<count_type> partition;
-        for (count_type i = 0; i <= num_ranks_; i++) {
-            partition.push_back(i*local_size);
+	partition.push_back(0);
+	partition.push_back(local_size);
+        for (count_type i = 2; i <= num_ranks_; i++) {
+            partition.push_back(local_size);
         }
 
         return gathered_vector<cell_gid_type>(std::move(gathered_gids), std::move(partition));
