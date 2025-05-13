@@ -31,6 +31,7 @@ communicator::communicator(const recipe& rec, const domain_decomposition& dom_de
     num_local_cells_{dom_dec.num_local_cells()},
     num_local_groups_{dom_dec.num_groups()},
     num_domains_{(cell_size_type)ctx->distributed->size()},
+    src_ranks_{{},{}},
     ctx_(std::move(ctx)) {}
 
 constexpr inline
@@ -233,16 +234,7 @@ void communicator::update_connections(const recipe& rec,
     PE(init:communicator:update:connections:gids);
     
     auto global_gids_domains = ctx_->distributed->all_to_all_gids_domains(gids_domains);
-    const auto& vals = global_gids_domains.values();
-    const auto& parts = global_gids_domains.partition();
-
-    for (std::size_t domain = 0; domain < parts.size() - 1; ++domain) {
-        auto start = parts[domain];
-        auto end = parts[domain + 1];
-        for (auto i = start; i < end; ++i) {
-           src_ranks[vals[i]].push_back(domain);
-        }
-    }
+    src_ranks_ = global_gids_domains;
     PL();
 
     // Sort the connections for each domain; num_domains_ independent sorts
@@ -255,8 +247,6 @@ void communicator::update_connections(const recipe& rec,
     PE(init:communicator:update:connections:partition);
     reset_partition(connections_by_src_domain, connection_part_);
     PL();
-    
-    src_ranks_ = std::move(src_ranks);
     
     PE(init:communicator:update:destructure:local);
     connections_.clear();
@@ -284,15 +274,28 @@ time_type communicator::min_delay() {
 
 std::vector<std::vector<spike>>
 generate_all_to_all_vector(const std::vector<spike>& spikes, 
-                           const std::unordered_map<cell_gid_type, std::vector<cell_size_type>>& src_ranks_,
-                           int num_domains){
+                           const gathered_vector<cell_gid_type>& src_ranks_){
 
-    std::vector<std::vector<spike>> spikes_per_rank(num_domains);
-    for (const spike& s : spikes) {
-        auto it = src_ranks_.find(s.source.gid);
-        if (it != src_ranks_.end()) {
-            for (cell_size_type rank : it->second) {
-                spikes_per_rank[rank].push_back(s);
+    std::vector<std::vector<spike>> spikes_per_rank(src_ranks_.partition().size());
+    for (auto& v : spikes_per_rank) {
+        v.reserve(spikes.size());
+    }
+    
+    const auto& vals = src_ranks_.values();
+    const auto& parts = src_ranks_.partition();
+
+    for (std::size_t domain = 0; domain < parts.size() - 1; ++domain) {
+        auto start = parts[domain];
+        auto end = parts[domain + 1];
+        auto sp = spikes.begin();
+        auto se = spikes.end();
+        while (sp < se && start < end){
+            while (sp->source.gid < vals[start] && sp < se) sp++;
+            while (vals[start] < sp->source.gid && start < end) start++;
+            if(vals[start] == sp->source.gid){
+                spikes_per_rank[domain].push_back(*sp);
+                sp++;
+                start++;
             }
         }
     }
@@ -307,7 +310,7 @@ communicator::exchange(std::vector<spike>& local_spikes) {
     PL();
     
     PE(communication:exchange:generate_all2all);
-    auto spikes_per_rank = generate_all_to_all_vector(local_spikes, src_ranks_, num_domains_);
+    auto spikes_per_rank = generate_all_to_all_vector(local_spikes, src_ranks_);
     PL();
 
     PE(communication:exchange:all2all);

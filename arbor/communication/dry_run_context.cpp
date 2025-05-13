@@ -21,28 +21,30 @@ struct dry_run_context_impl {
     gathered_vector<spike>
     all_to_all_spikes(const std::vector<std::vector<spike>>& local_spikes) const {
         using count_type = gathered_vector<spike>::count_type;
-        std::size_t local_size = local_spikes[0].size();
+        std::size_t total_size = 0;
+        std::vector<count_type> partition;
+        partition.reserve(num_ranks_ + 1);
+        partition.push_back(0);
 
-        std::vector<spike> gathered_spikes;
-        gathered_spikes.reserve(local_size*num_ranks_);
-
-        for (count_type i = 0; i < num_ranks_; i++) {
-            util::append(gathered_spikes, local_spikes[i]);
+        for (count_type i = 0; i < num_ranks_; ++i) {
+            total_size += local_spikes[i].size();
+            partition.push_back(static_cast<count_type>(total_size));
         }
 
-        for (count_type i = 0; i < num_ranks_; i++) {
-            for (count_type j = i*local_spikes[i].size(); j < (i+1)*local_spikes[i].size(); j++){
-                gathered_spikes[j].source.gid += num_cells_per_tile_*i;
+        std::vector<spike> gathered_spikes(total_size);
+        std::size_t current_spike = 0;
+        
+        for (count_type i = 0; i < num_ranks_; ++i) {
+            const auto& vec = local_spikes[i];
+            for (const auto& s : vec) {
+                spike s_copy = s;
+                s_copy.source.gid += num_cells_per_tile_ * i;
+                gathered_spikes[current_spike] = (std::move(s_copy));
+                current_spike++;
             }
         }
 
-        std::vector<count_type> partition;
-        partition.push_back(0);
-        for (count_type i = 1; i <= num_ranks_; i++) {
-            partition.push_back(static_cast<count_type>(i*local_spikes[i-1].size()));
-        }
-
-        return gathered_vector<spike>(std::move(gathered_spikes), std::move(partition));
+    return gathered_vector<spike>(std::move(gathered_spikes), std::move(partition));
     }
     gathered_vector<spike>
     gather_spikes(const std::vector<spike>& local_spikes) const {
