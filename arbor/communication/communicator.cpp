@@ -274,7 +274,7 @@ time_type communicator::min_delay() {
 
 std::vector<std::vector<spike>>
 generate_all_to_all_vector(const std::vector<spike>& spikes, 
-                           const gathered_vector<cell_gid_type>& src_ranks_){
+                           const gathered_vector<cell_gid_type>& src_ranks_, const context& ctx){
 
     std::vector<std::vector<spike>> spikes_per_rank(src_ranks_.partition().size());
     for (auto& v : spikes_per_rank) {
@@ -283,8 +283,8 @@ generate_all_to_all_vector(const std::vector<spike>& spikes,
     
     const auto& vals = src_ranks_.values();
     const auto& parts = src_ranks_.partition();
-
-    for (std::size_t domain = 0; domain < parts.size() - 1; ++domain) {
+    threading::parallel_for::apply(0, parts.size() - 1,ctx->thread_pool.get(),
+                                   [&](auto domain){
         auto start = parts[domain];
         auto end = parts[domain + 1];
         auto sp = spikes.begin();
@@ -298,7 +298,7 @@ generate_all_to_all_vector(const std::vector<spike>& spikes,
                 start++;
             }
         }
-    }
+    });
     return spikes_per_rank;
 }
 
@@ -309,9 +309,9 @@ communicator::exchange(std::vector<spike>& local_spikes) {
     util::sort_by(local_spikes, [](spike s){return s.source;});
     PL();
     
-    PE(communication:exchange:generate_all2all);
-    auto spikes_per_rank = generate_all_to_all_vector(local_spikes, src_ranks_);
-    PL();
+    //PE(communication:exchange:generate_all2all);
+    auto spikes_per_rank = generate_all_to_all_vector(local_spikes, src_ranks_, ctx_);
+    //PL();
 
     PE(communication:exchange:all2all);
     // global all-to-all to gather a local copy of the global spike list on each node.
