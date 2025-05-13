@@ -150,13 +150,14 @@ void communicator::update_connections(const recipe& rec,
     target_resolver.clear();
     bool resolution_enabled = rec.resolve_sources();
     auto my_rank = ctx_->distributed->id();
-    std::unordered_set<cell_gid_type> repeted_gids;
     std::vector<std::vector<cell_gid_type>> gids_domains(num_domains_);
+    std::unordered_map<cell_gid_type, std::vector<cell_size_type>> src_ranks;
+    
     for (auto& v : gids_domains) {
         v.reserve(gids.size());
     }
+    
     for (const auto tgt_gid: gids) {
-        gids_domains[my_rank].push_back(tgt_gid);
         auto iod = dom_dec.index_on_domain(tgt_gid);
         source_resolver.clear();
         for (const auto& conn: rec.connections_on(tgt_gid)) {
@@ -217,7 +218,6 @@ void communicator::update_connections(const recipe& rec,
         gids_domains[src_dom].push_back(src_gid);
         ++n_con;
     }
-    repeted_gids = std::unordered_set<cell_gid_type>();
     PL();
     
     PE(init:communicator:update:connections:sort_unique);
@@ -230,7 +230,6 @@ void communicator::update_connections(const recipe& rec,
     }
     PL();
     
-    std::unordered_map<cell_gid_type, std::vector<cell_size_type>> src_ranks;
     PE(init:communicator:update:connections:gids);
     
     auto global_gids_domains = ctx_->distributed->all_to_all_gids_domains(gids_domains);
@@ -306,6 +305,7 @@ communicator::exchange(std::vector<spike>& local_spikes) {
     // sort the spikes in ascending order of source gid
     util::sort_by(local_spikes, [](spike s){return s.source;});
     PL();
+    
     PE(communication:exchange:generate_all2all);
     auto spikes_per_rank = generate_all_to_all_vector(local_spikes, src_ranks_, num_domains_);
     PL();
@@ -423,6 +423,7 @@ void communicator::make_event_queues(communicator::spikes& spikes,
                                   util::subrange_view(spikes.from_local.values(), sp[dom], sp[dom+1]),
                                   queues);
     }
+
     num_local_events_ = util::sum_by(queues, [](const auto& q) {return q.size();}, num_local_events_);
     // Now that all local spikes have been processed; consume the remote events coming in.
     // - turn all gids into externals

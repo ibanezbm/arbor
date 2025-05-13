@@ -27,18 +27,19 @@ struct dry_run_context_impl {
         gathered_spikes.reserve(local_size*num_ranks_);
 
         for (count_type i = 0; i < num_ranks_; i++) {
-            util::append(gathered_spikes, local_spikes[0]);
+            util::append(gathered_spikes, local_spikes[i]);
         }
 
         for (count_type i = 0; i < num_ranks_; i++) {
-            for (count_type j = i*local_size; j < (i+1)*local_size; j++){
+            for (count_type j = i*local_spikes[i].size(); j < (i+1)*local_spikes[i].size(); j++){
                 gathered_spikes[j].source.gid += num_cells_per_tile_*i;
             }
         }
 
         std::vector<count_type> partition;
-        for (count_type i = 0; i <= num_ranks_; i++) {
-            partition.push_back(static_cast<count_type>(i*local_size));
+        partition.push_back(0);
+        for (count_type i = 1; i <= num_ranks_; i++) {
+            partition.push_back(static_cast<count_type>(i*local_spikes[i-1].size()));
         }
 
         return gathered_vector<spike>(std::move(gathered_spikes), std::move(partition));
@@ -101,13 +102,20 @@ struct dry_run_context_impl {
         std::size_t local_size = gids_domains[0].size();
 
         std::vector<cell_gid_type> gathered_gids;
-        gathered_gids.reserve(local_size);
-	util::append(gathered_gids, gids_domains[0]);
+        gathered_gids.reserve(local_size*num_ranks_);
+        for (count_type i = 0; i < num_cells_per_tile_; i++) {
+            gathered_gids.push_back(i);
+        }
+        
+        for (count_type i = 1; i < num_ranks_; i++) {
+            util::append(gathered_gids, gids_domains[0]);
+        }
 	
         std::vector<count_type> partition;
-	partition.push_back(0);
-        for (count_type i = 1; i <= num_ranks_; i++) {
-            partition.push_back(local_size);
+        partition.push_back(0);
+        partition.push_back(num_cells_per_tile_);
+        for (count_type i = 2; i <= num_ranks_; i++) {
+            partition.push_back(static_cast<count_type>(num_cells_per_tile_+(i-1)*local_size));
         }
 
         return gathered_vector<cell_gid_type>(std::move(gathered_gids), std::move(partition));
