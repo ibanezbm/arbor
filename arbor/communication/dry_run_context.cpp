@@ -31,20 +31,21 @@ struct dry_run_context_impl {
             partition.push_back(static_cast<count_type>(total_size));
         }
 
-        std::vector<spike> gathered_spikes(total_size);
-        std::size_t current_spike = 0;
-        
-        for (count_type i = 0; i < num_ranks_; ++i) {
-            const auto& vec = local_spikes[i];
-            for (const auto& s : vec) {
-                spike s_copy = s;
-                s_copy.source.gid += num_cells_per_tile_ * i;
-                gathered_spikes[current_spike] = (std::move(s_copy));
-                current_spike++;
-            }
+        std::vector<spike> gathered_spikes;
+        gathered_spikes.reserve(total_size);
+        for (count_type i = 0; i < num_ranks_; i++) {
+            util::append(gathered_spikes, local_spikes[i]);
         }
 
-    return gathered_vector<spike>(std::move(gathered_spikes), std::move(partition));
+        total_size = 0;
+        for (count_type i = 0; i < num_ranks_; i++) {
+            for (count_type j = total_size; j < total_size+local_spikes[i].size(); j++){
+                gathered_spikes[j].source.gid += num_cells_per_tile_*i;
+            }
+            total_size += local_spikes[i].size();
+        }
+
+        return gathered_vector<spike>(std::move(gathered_spikes), std::move(partition));
     }
     gathered_vector<spike>
     gather_spikes(const std::vector<spike>& local_spikes) const {

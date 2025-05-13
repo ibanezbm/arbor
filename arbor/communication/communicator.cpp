@@ -159,6 +159,7 @@ void communicator::update_connections(const recipe& rec,
     }
     
     for (const auto tgt_gid: gids) {
+        gids_domains[my_rank].push_back(tgt_gid);
         auto iod = dom_dec.index_on_domain(tgt_gid);
         source_resolver.clear();
         for (const auto& conn: rec.connections_on(tgt_gid)) {
@@ -285,6 +286,7 @@ generate_all_to_all_vector(const std::vector<spike>& spikes,
     const auto& parts = src_ranks_.partition();
     threading::parallel_for::apply(0, parts.size() - 1,ctx->thread_pool.get(),
                                    [&](auto domain){
+        auto& spikes_domain = spikes_per_rank[domain];
         auto start = parts[domain];
         auto end = parts[domain + 1];
         auto sp = spikes.begin();
@@ -293,7 +295,7 @@ generate_all_to_all_vector(const std::vector<spike>& spikes,
             while (sp->source.gid < vals[start] && sp < se) sp++;
             while (vals[start] < sp->source.gid && start < end) start++;
             if(vals[start] == sp->source.gid){
-                spikes_per_rank[domain].push_back(*sp);
+                spikes_domain.push_back(*sp);
                 sp++;
                 start++;
             }
@@ -309,10 +311,8 @@ communicator::exchange(std::vector<spike>& local_spikes) {
     util::sort_by(local_spikes, [](spike s){return s.source;});
     PL();
     
-    //PE(communication:exchange:generate_all2all);
     auto spikes_per_rank = generate_all_to_all_vector(local_spikes, src_ranks_, ctx_);
-    //PL();
-
+    
     PE(communication:exchange:all2all);
     // global all-to-all to gather a local copy of the global spike list on each node.
     auto global_spikes = ctx_->distributed->all_to_all_spikes(spikes_per_rank);
