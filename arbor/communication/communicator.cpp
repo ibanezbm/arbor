@@ -284,7 +284,8 @@ generate_all_to_all_vector(const std::vector<spike>& spikes,
     
     const auto& vals = src_ranks_.values();
     const auto& parts = src_ranks_.partition();
-    threading::parallel_for::apply(0, parts.size() - 1,ctx->thread_pool.get(),
+
+    arb::threading::parallel_for::apply(0, parts.size() - 1,ctx->thread_pool.get(),
                                    [&](auto domain){
         auto& spikes_domain = spikes_per_rank[domain];
         auto start = parts[domain];
@@ -292,12 +293,11 @@ generate_all_to_all_vector(const std::vector<spike>& spikes,
         auto sp = spikes.begin();
         auto se = spikes.end();
         while (sp < se && start < end){
-            while (sp->source.gid < vals[start] && sp < se) sp++;
-            while (vals[start] < sp->source.gid && start < end) start++;
+            while (sp < se && sp->source.gid < vals[start]) sp++;
+            while (start < end && vals[start] < sp->source.gid) start++;
             if(vals[start] == sp->source.gid){
                 spikes_domain.push_back(*sp);
                 sp++;
-                start++;
             }
         }
     });
