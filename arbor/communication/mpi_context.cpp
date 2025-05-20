@@ -53,6 +53,13 @@ struct mpi_context_impl {
     all_to_all_spikes(const gathered_vector<spike>& local_spikes) const {
         return mpi::all_to_all_with_partition(local_spikes, comm_);
     }
+    
+    gathered_vector<spike>
+    all_to_all_buffer_spikes(const std::vector<spike>& local_spikes, 
+                             const gathered_vector<cell_gid_type>& src_ranks_,
+                             const context& ctx) const {
+        return mpi::all_to_all_with_partition(local_spikes, comm_);
+    }
 
     gathered_vector<cell_gid_type>
     gather_gids(const std::vector<cell_gid_type>& local_gids) const {
@@ -201,6 +208,11 @@ struct remote_context_impl {
 
     gathered_vector<spike>
     all_to_all_spikes(const gathered_vector<spike>& local_spikes) const {
+        return mpi_.all_to_all_spikes(local_spikes);
+    }
+    
+    gathered_vector<spike>
+    all_to_all_buffer_spikes(const gathered_vector<spike>& local_spikes, const context& ctx) const {
         return mpi_.all_to_all_spikes(local_spikes);
     }
 

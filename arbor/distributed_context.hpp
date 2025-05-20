@@ -100,6 +100,12 @@ public:
     gathered_vector<spike> all_to_all_spikes(const gathered_vector<spike>& local_spikes) const {
         return impl_->all_to_all_spikes(local_spikes);
     }
+    
+    gathered_vector<spike> all_to_all_buffer_spikes(const std::vector<spike>& local_spikes, 
+                                                    const gathered_vector<cell_gid_type>& src_ranks_,
+                                                    const context& ctx) const {
+        return impl_->all_to_all_buffer_spikes(local_spikes, src_ranks_, ctx);
+    }
 
     gathered_vector<cell_gid_type> gather_gids(const gid_vector& local_gids) const {
         return impl_->gather_gids(local_gids);
@@ -169,6 +175,10 @@ private:
         gather_spikes(const spike_vector& local_spikes) const = 0;
         virtual gathered_vector<spike> 
         all_to_all_spikes(const gathered_vector<spike>& local_spikes) const = 0;
+        virtual gathered_vector<spike> 
+        all_to_all_buffer_spikes(const std::vector<spike>& local_spikes, 
+                                 const gathered_vector<cell_gid_type>& src_ranks_, 
+                                 const context& ctx) const = 0;
         virtual spike_vector
         remote_gather_spikes(const spike_vector& local_spikes) const = 0;
         virtual gathered_vector<cell_gid_type>
@@ -216,6 +226,12 @@ private:
         gathered_vector<spike>
         all_to_all_spikes(const gathered_vector<spike>& local_spikes) const override {
             return wrapped.all_to_all_spikes(local_spikes);
+        }
+        gathered_vector<spike> 
+        all_to_all_buffer_spikes(const std::vector<spike>& local_spikes, 
+                                 const gathered_vector<cell_gid_type>& src_ranks_,
+                                 const context& ctx) const override {
+            return wrapped.all_to_all_buffer_spikes(local_spikes, src_ranks_, ctx);
         }
         gathered_vector<cell_gid_type>
         gather_gids(const gid_vector& local_gids) const override {
@@ -280,11 +296,21 @@ struct local_context {
             {0u, static_cast<count_type>(local_spikes.size())}
         );
     }
-    gathered_vector<spike> all_to_all_spikes(const gathered_vector<spike>& local) const {
+    gathered_vector<spike> all_to_all_spikes(const gathered_vector<spike>& local_spikes) const {
         using count_type = typename gathered_vector<spike>::count_type;
-        std::vector<count_type> partition{0, local.count(0)};
-        const auto& spikes = local.values();
-        std::vector<spike> gathered(spikes.begin(), spikes.begin() + local.count(0));
+        std::vector<count_type> partition{0, local_spikes.count(0)};
+        const auto& spikes = local_spikes.values();
+        std::vector<spike> gathered(spikes.begin(), spikes.begin() + local_spikes.count(0));
+        return gathered_vector<spike>(std::move(gathered), std::move(partition));
+    }
+    
+    gathered_vector<spike> all_to_all_buffer_spikes(const std::vector<spike>& local_spikes, 
+                                                    const gathered_vector<cell_gid_type>& src_ranks_,
+                                                    const context& ctx) const {
+        using count_type = typename gathered_vector<spike>::count_type;
+        std::vector<count_type> partition{0, static_cast<count_type>(local_spikes.size())};
+        //const auto& spikes = local_spikes.values();
+        std::vector<spike> gathered(local_spikes.begin(), local_spikes.begin() + local_spikes.size());
         return gathered_vector<spike>(std::move(gathered), std::move(partition));
     }
     std::vector<spike>

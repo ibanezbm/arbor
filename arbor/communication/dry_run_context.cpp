@@ -37,6 +37,85 @@ struct dry_run_context_impl {
         }
         return gathered_vector<spike>(std::move(gathered_spikes), std::move(partition));
     }
+    
+    gathered_vector<spike>
+    all_to_all_buffer_spikes(const std::vector<spike>& local_spikes, 
+                             const gathered_vector<cell_gid_type>& src_ranks_, 
+                             const context& ctx) const {
+        
+        const auto& vals = src_ranks_.values();
+        const auto& parts = src_ranks_.partition();
+        constexpr std::size_t buffer_size_bytes = 128 * 1024 * 1024;
+        constexpr std::size_t spike_size = sizeof(spike);
+        std::size_t spikes_per_block = buffer_size_bytes / spike_size / num_ranks_;
+        std::vector<spike> result;
+
+        bool done = false;
+        std::mutex mtx;
+        std::condition_variable cv;
+        std::vector<spike> recv_buffer(spikes_per_block*num_ranks_);
+        
+        
+        auto receiver = std::thread([&] {
+            while (!done.load()) {
+                std::unique_lock<std::mutex> lock(mtx);
+                cv.wait(lock, [] { return !buffer.empty() || done; });
+            }
+        });
+        
+        
+        for (const auto& sp: local_spikes) {
+            for (std::size_t rank = 0; rank < num_ranks; rank++){
+                {
+                    std::lock_guard<std::mutex> lock(mtx);
+                    auto it = std::lower_bound(vals.begin() + parts[rank], 
+                                               vals.begin() + parts[rank + 1], 
+                                               sp.source.gid);
+                    if (it != v.end() && *it == target) {
+                        
+                    }
+                }
+            }
+            
+            cv.notify_one();
+        }
+
+        done = true;
+        cv.notify_one();
+        receiver.join();
+
+        // convertir recv_buffer a gathered_vector y devolver
+        return gathered_vector<spike>(std::move(recv_buffer), {/*partition info*/});
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        auto local_size = local_spikes.count(0);
+        const auto& local = local_spikes.values();
+        std::vector<spike> gathered_spikes;
+        gathered_spikes.reserve(static_cast<size_t>(local_size) * static_cast<size_t>(num_ranks_));
+        std::vector<count_type> partition;
+        partition.reserve(num_ranks_ + 1);
+        partition.push_back(0);
+        for (std::size_t ridx = 0; ridx < num_ranks_; ridx++) {
+            for (std::size_t lidx = 0; lidx < local_size; ++lidx) {
+                auto spike = local[lidx];
+                spike.source.gid += num_cells_per_tile_*ridx;
+                gathered_spikes.push_back(spike);
+            }
+            partition.push_back(gathered_spikes.size());
+        }
+        return gathered_vector<spike>(std::move(gathered_spikes), std::move(partition));
+    }
+    
     gathered_vector<spike>
     gather_spikes(const std::vector<spike>& local_spikes) const {
 
