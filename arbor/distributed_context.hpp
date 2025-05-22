@@ -102,8 +102,8 @@ public:
     }
     
     gathered_vector<spike> all_to_all_buffer_spikes(const std::vector<spike>& local_spikes, 
-                                                    const gathered_vector<cell_gid_type>& src_ranks_,
-                                                    const context& ctx) const {
+                                const std::unordered_map<cell_size_type, std::vector<cell_gid_type>>& src_ranks_,
+                                const context& ctx) const {
         return impl_->all_to_all_buffer_spikes(local_spikes, src_ranks_, ctx);
     }
 
@@ -177,7 +177,7 @@ private:
         all_to_all_spikes(const gathered_vector<spike>& local_spikes) const = 0;
         virtual gathered_vector<spike> 
         all_to_all_buffer_spikes(const std::vector<spike>& local_spikes, 
-                                 const gathered_vector<cell_gid_type>& src_ranks_, 
+                                 const std::unordered_map<cell_size_type, std::vector<cell_gid_type>>& src_ranks_, 
                                  const context& ctx) const = 0;
         virtual spike_vector
         remote_gather_spikes(const spike_vector& local_spikes) const = 0;
@@ -229,7 +229,7 @@ private:
         }
         gathered_vector<spike> 
         all_to_all_buffer_spikes(const std::vector<spike>& local_spikes, 
-                                 const gathered_vector<cell_gid_type>& src_ranks_,
+                                 const std::unordered_map<cell_size_type, std::vector<cell_gid_type>>& src_ranks_,
                                  const context& ctx) const override {
             return wrapped.all_to_all_buffer_spikes(local_spikes, src_ranks_, ctx);
         }
@@ -305,8 +305,8 @@ struct local_context {
     }
     
     gathered_vector<spike> all_to_all_buffer_spikes(const std::vector<spike>& local_spikes, 
-                                                    const gathered_vector<cell_gid_type>& src_ranks_,
-                                                    const context& ctx) const {
+                                  const std::unordered_map<cell_size_type, std::vector<cell_gid_type>>& src_ranks_,
+                                  const context& ctx) const {
         using count_type = typename gathered_vector<spike>::count_type;
         std::vector<count_type> partition{0, static_cast<count_type>(local_spikes.size())};
         //const auto& spikes = local_spikes.values();

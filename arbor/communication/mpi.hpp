@@ -341,6 +341,26 @@ gathered_vector<T> all_to_all_with_partition(const std::vector<std::vector<T>>& 
 }
 
 template <typename T>
+gathered_vector<T> all_to_all_with_partition(const std::vector<T>& values, MPI_Comm comm) {
+    //using traits = mpi_traits<T>;
+
+    std::vector<int> send_counts(1, 0);
+    std::vector<int> send_displs(1, 0);
+    std::vector<T> send_buffer;
+
+    /*for (int i = 0; i < num_ranks_; ++i) {
+        send_counts[i] = values[i].size() * traits::count();
+        send_displs[i] = send_buffer.size() * traits::count();
+        send_buffer.insert(send_buffer.end(), values[i].begin(), values[i].end());
+    }*/
+    return all_to_all_impl(send_buffer,
+                           send_counts,
+                           send_displs,
+                           1,
+                           comm);
+}
+
+template <typename T>
 T reduce(T value, MPI_Op op, int root, MPI_Comm comm) {
     using traits = mpi_traits<T>;
     static_assert(traits::is_mpi_native_type(),

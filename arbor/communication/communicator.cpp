@@ -31,7 +31,6 @@ communicator::communicator(const recipe& rec, const domain_decomposition& dom_de
     num_local_cells_{dom_dec.num_local_cells()},
     num_local_groups_{dom_dec.num_groups()},
     num_domains_{(cell_size_type)ctx->distributed->size()},
-    src_ranks_{{},{0}},
     ctx_(std::move(ctx)) {}
 
 constexpr inline
@@ -188,6 +187,7 @@ void communicator::update_connections(const recipe& rec,
         v.reserve(gids.size());
     }
     for (const auto tgt_gid: gids) {
+        gids_domains[my_rank].push_back(tgt_gid);
         auto tgt_iod = dom_dec.index_on_domain(tgt_gid);
         source_resolver.clear();
         for (const auto& conn: rec.connections_on(tgt_gid)) {
@@ -237,19 +237,13 @@ void communicator::update_connections(const recipe& rec,
     PE(init:communicator:update:connections:gids);
     
     auto global_gids_domains = ctx_->distributed->all_to_all_gids_domains(gids_domains);
-    src_ranks_ = std::move(global_gids_domains);
-    auto vals = src_ranks_.values();
-    auto parts = src_ranks_.partition();
-    auto start = parts[my_rank];
-    auto end = parts[my_rank + 1];
-    std::size_t old_count = end - start;
-    std::size_t new_count = gids.size();
-    std::size_t delta = new_count - old_count;
-    printf("\n Delta: %ld", delta);
-    vals.erase(vals.begin() + start, vals.begin() + end);
-    vals.insert(vals.begin() + start, gids.begin(), gids.end());
-    for (std::size_t i = 1; i < parts.size(); ++i) {
-        parts[i] += delta;
+
+    const auto& values = global_gids_domains.values();
+    const auto& parts = global_gids_domains.partition();
+    for (std::size_t rank = 0; rank < parts.size() - 1; ++rank) {
+        for (std::size_t i = parts[rank]; i < parts[rank + 1]; ++i) {
+            src_ranks_[values[i]].push_back(rank);
+        }
     }
     PL();
     // Sort the connections for each domain; num_domains_ independent sorts
@@ -348,8 +342,8 @@ communicator::exchange(std::vector<spike>& local_spikes) {
     PL();
 
     PE(communication:exchange:sum_spikes);
-    //num_local_spikes_ = ctx_->distributed->sum(local_spikes.size());
-    //num_spikes_ += num_local_spikes_;
+    num_local_spikes_ = ctx_->distributed->sum(local_spikes.size());
+    num_spikes_ += num_local_spikes_;
     PL();
 
     //auto spikes_per_rank = generate_all_to_all_vector(local_spikes, src_ranks_, ctx_);

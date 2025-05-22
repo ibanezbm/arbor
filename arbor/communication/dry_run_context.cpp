@@ -1,5 +1,6 @@
 #include <string>
 #include <vector>
+#include <thread>
 
 #include <arbor/spike.hpp>
 
@@ -40,80 +41,85 @@ struct dry_run_context_impl {
     
     gathered_vector<spike>
     all_to_all_buffer_spikes(const std::vector<spike>& local_spikes, 
-                             const gathered_vector<cell_gid_type>& src_ranks_, 
+                             const std::unordered_map<cell_size_type, std::vector<cell_gid_type>>& src_ranks_, 
                              const context& ctx) const {
-        
-        const auto& vals = src_ranks_.values();
-        const auto& parts = src_ranks_.partition();
+
         constexpr std::size_t buffer_size_bytes = 128 * 1024 * 1024;
         constexpr std::size_t spike_size = sizeof(spike);
-        std::size_t spikes_per_block = buffer_size_bytes / spike_size / num_ranks_;
-        std::vector<spike> result;
-
-        bool done = false;
-        std::mutex mtx;
-        std::condition_variable cv;
-        std::vector<spike> recv_buffer(spikes_per_block*num_ranks_);
+        std::size_t spikes_per_buffer = buffer_size_bytes / spike_size;
+        std::size_t spikes_per_rank = buffer_size_bytes / spike_size / num_ranks_;
+        std::size_t total_buffers = local_spikes.size() * num_ranks_ / spikes_per_buffer;
         
+        
+        if ((local_spikes.size() * num_ranks_) % (buffer_size_bytes / spike_size)) {
+            total_buffers++;
+        }
+        
+        std::vector<std::vector<std::vector<spike>>> rounds(total_buffers,
+                                                    std::vector<std::vector<spike>>(num_ranks_));
+        
+        for (std::size_t b = 0; b < total_buffers; ++b) {
+            for (std::size_t r = 0; r < num_ranks_; ++r) {
+                rounds[b][r].reserve(spikes_per_rank);
+            }
+        }
+        
+        std::vector<bool> ready(total_buffers, false);
+        
+        std::vector<std::vector<spike>> result(num_ranks_);
+        for (std::size_t r = 0; r < num_ranks_; ++r) {
+            result[r].reserve(local_spikes.size());
+        }
+        
+        std::vector<count_type> partition(num_ranks_ + 1, 0);
         
         auto receiver = std::thread([&] {
-            while (!done.load()) {
-                std::unique_lock<std::mutex> lock(mtx);
-                cv.wait(lock, [] { return !buffer.empty() || done; });
+            std::size_t start = 0;
+            while (start < total_buffers) {
+                while (!ready[start]){std::this_thread::yield();}
+                for (std::size_t r = 0; r < num_ranks_; ++r) {
+                    result[r].insert(result[r].end(), rounds[start][r].begin(), rounds[start][r].end());
+                }
+                start++;
             }
         });
         
-        
-        for (const auto& sp: local_spikes) {
-            for (std::size_t rank = 0; rank < num_ranks; rank++){
-                {
-                    std::lock_guard<std::mutex> lock(mtx);
-                    auto it = std::lower_bound(vals.begin() + parts[rank], 
-                                               vals.begin() + parts[rank + 1], 
-                                               sp.source.gid);
-                    if (it != v.end() && *it == target) {
-                        
-                    }
+        std::size_t buffer_id = 0;
+        std::size_t spikes_this_round = 0;
+        for (const auto& sp : local_spikes) {
+            bool sent = false;
+            auto it = src_ranks_.find(sp.source.gid);
+            if (it != src_ranks_.end()) {
+                for (cell_size_type valor : it->second) {
+                    auto spike = sp;
+                    spike.source.gid += num_cells_per_tile_*valor;
+                    rounds[buffer_id][valor].push_back(spike);
+                    sent = true;
                 }
             }
-            
-            cv.notify_one();
-        }
-
-        done = true;
-        cv.notify_one();
-        receiver.join();
-
-        // convertir recv_buffer a gathered_vector y devolver
-        return gathered_vector<spike>(std::move(recv_buffer), {/*partition info*/});
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        auto local_size = local_spikes.count(0);
-        const auto& local = local_spikes.values();
-        std::vector<spike> gathered_spikes;
-        gathered_spikes.reserve(static_cast<size_t>(local_size) * static_cast<size_t>(num_ranks_));
-        std::vector<count_type> partition;
-        partition.reserve(num_ranks_ + 1);
-        partition.push_back(0);
-        for (std::size_t ridx = 0; ridx < num_ranks_; ridx++) {
-            for (std::size_t lidx = 0; lidx < local_size; ++lidx) {
-                auto spike = local[lidx];
-                spike.source.gid += num_cells_per_tile_*ridx;
-                gathered_spikes.push_back(spike);
+            if (sent) {
+                spikes_this_round++;
+                if (spikes_this_round == spikes_per_rank) {
+                    ready[buffer_id] = true;
+                    buffer_id++;
+                    spikes_this_round = 0;
+                }
             }
-            partition.push_back(gathered_spikes.size());
         }
-        return gathered_vector<spike>(std::move(gathered_spikes), std::move(partition));
+        
+        receiver.join();
+        
+        for (std::size_t r = 1; r <= num_ranks_; ++r) {
+            partition[r] = result[r-1].size() + partition[r-1];
+        }
+        std::vector<spike> flat_result;
+        flat_result.reserve(partition.back());
+        for (auto& r : result) {
+            flat_result.insert(flat_result.end(),
+                std::make_move_iterator(r.begin()),
+                std::make_move_iterator(r.end()));
+        }
+        return gathered_vector<spike>(std::move(flat_result), std::move(partition));
     }
     
     gathered_vector<spike>
