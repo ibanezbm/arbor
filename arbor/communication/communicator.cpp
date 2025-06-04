@@ -231,8 +231,8 @@ void communicator::update_connections(const recipe& rec,
     });
     PL();
     
-    PE(init:communicator:update:connections:gids);
-        auto srcs_by_rank = ctx_->distributed->all_to_all_gids_domains(gids_domains);
+    auto srcs_by_rank = ctx_->distributed->all_to_all_gids_domains(gids_domains);
+    PE(init:communicator:update:connections:gids_connection);
         const auto& part = srcs_by_rank.partition();
         const auto& srcs = srcs_by_rank.values();
         for (auto domain: util::make_span(0, num_domains_)) {
@@ -332,10 +332,10 @@ communicator::exchange(std::vector<spike>& local_spikes) {
     PE(communication:exchange:generate);
     auto spikes_per_rank = generate_all_to_all_vector(local_spikes, src_ranks_, num_domains_);
     PL();
-    PE(communication:exchange:all2all);
+    //PE(communication:exchange:all2all);
     // global all-to-all to gather a local copy of the global spike list on each node.
     auto global_spikes = ctx_->distributed->all_to_all_spikes(spikes_per_rank);
-    PL();
+    //PL();
 
     // Get remote spikes
     PE(communication:exchange:gather:remote);

@@ -290,11 +290,159 @@ inline gathered_vector<T> all_to_all_impl(const std::vector<T>& send_buffer, con
     return gathered_type(std::move(recv_buffer), std::move(partition));
 }
 
+inline void wait_all(std::vector<MPI_Request> &&requests) {
+    if(!requests.empty()) {
+        MPI_OR_THROW(
+            MPI_Waitall, static_cast<int>(requests.size()), requests.data(), MPI_STATUSES_IGNORE);
+    }
+}
+
+template <typename T>
+inline gathered_vector<T> all_to_all_impl_batched(const std::vector<T>& send_buffer,
+                                                  const std::vector<int>& send_counts,
+                                                  const std::vector<int>& send_displs,
+                                                  int num_ranks,
+                                                  MPI_Comm comm,
+                                                  std::size_t batch_bytes = 128 * 1024 * 1024) {
+    using gathered_type = gathered_vector<T>;
+    using count_type = typename gathered_type::count_type;
+    using traits = mpi_traits<T>;
+    std::vector<count_type> partition(num_ranks + 1, 0);
+    std::vector<T> recv_buffer;
+
+    std::vector<int> rounds_per_rank(num_ranks, 0);
+    int spikes_per_rank = batch_bytes / traits::count() / num_ranks;
+    
+    for (int i = 0; i < num_ranks; i++){
+        rounds_per_rank[i] = static_cast<std::size_t>(std::ceil(
+                                                      static_cast<double>(send_counts[i]) / spikes_per_rank));
+    }
+
+    int rounds = *std::max_element(rounds_per_rank.begin(), rounds_per_rank.end());
+    int rounds_max;
+
+    PE(communication:exchange:all2all:allreduce);
+    MPI_Allreduce(&rounds, &rounds_max, 1, MPI_INT, MPI_MAX, comm);
+    PL();
+    std::vector<int> spikes_sent_per_rank(num_ranks, 0);
+    int cur_round = 0;
+    while (cur_round < rounds_max) {
+        std::vector<T> send_buffer_round;
+        std::vector<int> send_counts_round(num_ranks, 0);
+        std::vector<int> send_displs_round(num_ranks, 0);
+        
+        PE(communication:exchange:all2all:prev);
+        send_buffer_round.reserve(batch_bytes / traits::count());
+	for (int rank = 0; rank < num_ranks; rank++) {
+	    const int spikes_sent = spikes_sent_per_rank[rank];
+            const int send_count = send_counts[rank];
+            if(spikes_sent < send_count) {
+                
+                std::size_t sent_spikes_init = send_displs[rank] + spikes_sent;
+                std::size_t sent_spikes_end = sent_spikes_init + std::min(spikes_per_rank, 
+                                                                          send_count - spikes_sent);
+		std::size_t batch_size = sent_spikes_end - sent_spikes_init;
+                //printf("AAAAAA %ld %ld %d %d\n",sent_spikes_init,sent_spikes_end, spikes_per_rank, send_counts[rank] - spikes_sent_per_rank[rank]);
+		send_buffer_round.insert(send_buffer_round.end(),
+                                 send_buffer.begin() + sent_spikes_init,
+                                 send_buffer.begin() + sent_spikes_end);
+                
+		spikes_sent_per_rank[rank] += batch_size;
+                send_counts_round[rank] = batch_size * traits::count();
+            }
+            
+            if(rank != 0) {
+                send_displs_round[rank] = send_counts_round[rank - 1] + send_displs_round[rank - 1];
+            }
+        }
+        PL();
+        std::vector<int> recv_counts_round(num_ranks, 0);
+        std::vector<int> recv_displs_round(num_ranks, 0);
+
+        PE(communication:exchange:all2all:sizes);
+        MPI_OR_THROW(MPI_Alltoall,
+                     send_counts_round.data(), 1, MPI_INT,
+                     recv_counts_round.data(), 1, MPI_INT,
+                     comm);
+        
+        util::make_partition(recv_displs_round, recv_counts_round);
+
+        auto count_per_element = traits::count();
+        std::vector<T> recv_buffer_round(recv_displs_round.back() / count_per_element);
+        
+/*            printf("send_counts: ");
+for (std::size_t i = 0; i < send_counts_round.size(); ++i) {
+    printf("%d ", send_counts_round[i]);
+}
+printf("\n");
+
+            printf("spikes_sent: ");
+for (std::size_t i = 0; i < spikes_sent_per_rank.size(); ++i) {
+    printf("%d ", spikes_sent_per_rank[i]);
+}
+printf("\n");
+
+printf("send_displs: ");
+for (std::size_t i = 0; i < send_displs_round.size(); ++i) {
+    printf("%d ", send_displs_round[i]);
+}
+
+printf("recv_count: ");
+for (std::size_t i = 0; i < recv_counts_round.size(); ++i) {
+    printf("%d ", recv_counts_round[i]);
+}
+
+printf("recv_displs: ");
+for (std::size_t i = 0; i < recv_displs_round.size(); ++i) {
+    printf("%d ", recv_displs_round[i]);
+}
+
+printf("partition: ");
+for (std::size_t i = 0; i < partition.size(); ++i) {
+    printf("%d ", partition[i]);
+}
+printf("\n");*/
+
+        PL();
+
+        PE(communication:exchange:all2all:communication);
+        MPI_OR_THROW(MPI_Alltoallv,
+                                send_buffer_round.data(), send_counts_round.data(), 
+                                send_displs_round.data(), traits::mpi_type(),
+                                recv_buffer_round.data(), recv_counts_round.data(), 
+                                recv_displs_round.data(), traits::mpi_type(),
+                                comm);
+        PL();
+
+
+        PE(communication:exchange:all2all:post);
+        int total_spikes = 0;
+        for (int rank = 0; rank < num_ranks; rank++) {
+            total_spikes += partition[rank + 1];
+            recv_buffer.insert(recv_buffer.begin() + total_spikes, 
+                               recv_buffer_round.begin() + (recv_displs_round[rank] / count_per_element), 
+                               recv_buffer_round.begin()+ (recv_displs_round[rank+1] / count_per_element));
+            partition[rank + 1] += recv_counts_round[rank] / count_per_element;
+            total_spikes += recv_counts_round[rank] / count_per_element;
+        }
+        cur_round++;
+	PL();
+    }
+
+    PE(communication:exchange:all2all:partition);
+    for (int rank = 1; rank < num_ranks + 1; rank++) {
+        partition[rank] += partition[rank - 1];
+    }
+    PL();
+    //printf("AAAA %ld %d\n", recv_buffer.size(), partition.back());
+    return gathered_type(std::move(recv_buffer), std::move(partition));
+}
+
 /// AlltoAll of a gathered vector
 /// Retains the meta data (i.e. vector partition)
 template <typename T>
 gathered_vector<T> all_to_all_with_partition(const gathered_vector<T>& values, MPI_Comm comm) {
-    using traits = mpi_traits<T>;
+    //using traits = mpi_traits<T>;
 
     int num_ranks = values.partition().size() - 1;
 
@@ -305,12 +453,12 @@ gathered_vector<T> all_to_all_with_partition(const gathered_vector<T>& values, M
     const auto& partition = values.partition();
 
     for (int i = 0; i < num_ranks; ++i) {
-        int count = values.count(i) * traits::count();
+        int count = values.count(i);
         send_counts[i] = count;
-        send_displs[i] = partition[i] * traits::count();
+        send_displs[i] = partition[i];
     }
 
-    return all_to_all_impl(send_buffer,
+    return all_to_all_impl_batched(send_buffer,
                            send_counts,
                            send_displs,
                            num_ranks,
@@ -321,24 +469,35 @@ gathered_vector<T> all_to_all_with_partition(const gathered_vector<T>& values, M
 /// Retains the meta data (i.e. vector partition)
 template <typename T>
 gathered_vector<T> all_to_all_with_partition(const std::vector<std::vector<T>>& values, MPI_Comm comm) {
-    using traits = mpi_traits<T>;
+    //using traits = mpi_traits<T>;
     int num_ranks = values.size();
 
     std::vector<int> send_counts(num_ranks, 0);
     std::vector<int> send_displs(num_ranks, 0);
-    std::vector<T> send_buffer;
-
+    
+    std::size_t offset = 0;
     for (int i = 0; i < num_ranks; ++i) {
-        send_counts[i] = values[i].size() * traits::count();
-        send_displs[i] = send_buffer.size() * traits::count();
-        send_buffer.insert(send_buffer.end(), values[i].begin(), values[i].end());
+        send_counts[i] = static_cast<int>(values[i].size());
+        send_displs[i] = static_cast<int>(offset);
+        offset += values[i].size();
     }
-    return all_to_all_impl(send_buffer,
+    
+    std::vector<T> send_buffer(offset);
+
+    std::size_t buf_offset = 0;
+    for (int i = 0; i < num_ranks; ++i) {
+        const auto& vec = values[i];
+        std::copy(vec.begin(), vec.end(), send_buffer.begin() + buf_offset);
+        buf_offset += vec.size();
+    }
+
+    return all_to_all_impl_batched(send_buffer,
                            send_counts,
                            send_displs,
                            num_ranks,
-                           comm);
+                           comm);    
 }
+
 
 template <typename T>
 T reduce(T value, MPI_Op op, int root, MPI_Comm comm) {
@@ -452,12 +611,6 @@ inline std::vector<MPI_Request> irecv(std::size_t num_bytes,
     return requests;
 }
 
-inline void wait_all(std::vector<MPI_Request> requests) {
-    if(!requests.empty()) {
-        MPI_OR_THROW(
-            MPI_Waitall, static_cast<int>(requests.size()), requests.data(), MPI_STATUSES_IGNORE);
-    }
-}
-
 } // namespace mpi
 } // namespace arb
+
