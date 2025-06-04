@@ -308,11 +308,11 @@ inline gathered_vector<T> all_to_all_impl_batched(const std::vector<T>& send_buf
     using count_type = typename gathered_type::count_type;
     using traits = mpi_traits<T>;
     std::vector<count_type> partition(num_ranks + 1, 0);
-    std::vector<T> recv_buffer;
+    std::vector<std::vector<T>> recv_buffer(num_ranks);
 
     std::vector<int> rounds_per_rank(num_ranks, 0);
     int spikes_per_rank = batch_bytes / traits::count() / num_ranks;
-    
+
     for (int i = 0; i < num_ranks; i++){
         rounds_per_rank[i] = static_cast<std::size_t>(std::ceil(
                                                       static_cast<double>(send_counts[i]) / spikes_per_rank));
@@ -333,24 +333,22 @@ inline gathered_vector<T> all_to_all_impl_batched(const std::vector<T>& send_buf
         
         PE(communication:exchange:all2all:prev);
         send_buffer_round.reserve(batch_bytes / traits::count());
-	for (int rank = 0; rank < num_ranks; rank++) {
-	    const int spikes_sent = spikes_sent_per_rank[rank];
+	    for (int rank = 0; rank < num_ranks; rank++) {
+	        const int spikes_sent = spikes_sent_per_rank[rank];
             const int send_count = send_counts[rank];
             if(spikes_sent < send_count) {
-                
-                std::size_t sent_spikes_init = send_displs[rank] + spikes_sent;
-                std::size_t sent_spikes_end = sent_spikes_init + std::min(spikes_per_rank, 
-                                                                          send_count - spikes_sent);
-		std::size_t batch_size = sent_spikes_end - sent_spikes_init;
-                //printf("AAAAAA %ld %ld %d %d\n",sent_spikes_init,sent_spikes_end, spikes_per_rank, send_counts[rank] - spikes_sent_per_rank[rank]);
-		send_buffer_round.insert(send_buffer_round.end(),
-                                 send_buffer.begin() + sent_spikes_init,
-                                 send_buffer.begin() + sent_spikes_end);
-                
-		spikes_sent_per_rank[rank] += batch_size;
+                    std::size_t sent_spikes_init = send_displs[rank] + spikes_sent;
+                    std::size_t sent_spikes_end = sent_spikes_init + std::min(spikes_per_rank,
+                                                                              send_count - spikes_sent);
+		        std::size_t batch_size = sent_spikes_end - sent_spikes_init;
+		        send_buffer_round.insert(send_buffer_round.end(),
+                                         send_buffer.begin() + sent_spikes_init,
+                                         send_buffer.begin() + sent_spikes_end);
+
+		        spikes_sent_per_rank[rank] += batch_size;
                 send_counts_round[rank] = batch_size * traits::count();
             }
-            
+
             if(rank != 0) {
                 send_displs_round[rank] = send_counts_round[rank - 1] + send_displs_round[rank - 1];
             }
@@ -369,40 +367,6 @@ inline gathered_vector<T> all_to_all_impl_batched(const std::vector<T>& send_buf
 
         auto count_per_element = traits::count();
         std::vector<T> recv_buffer_round(recv_displs_round.back() / count_per_element);
-        
-/*            printf("send_counts: ");
-for (std::size_t i = 0; i < send_counts_round.size(); ++i) {
-    printf("%d ", send_counts_round[i]);
-}
-printf("\n");
-
-            printf("spikes_sent: ");
-for (std::size_t i = 0; i < spikes_sent_per_rank.size(); ++i) {
-    printf("%d ", spikes_sent_per_rank[i]);
-}
-printf("\n");
-
-printf("send_displs: ");
-for (std::size_t i = 0; i < send_displs_round.size(); ++i) {
-    printf("%d ", send_displs_round[i]);
-}
-
-printf("recv_count: ");
-for (std::size_t i = 0; i < recv_counts_round.size(); ++i) {
-    printf("%d ", recv_counts_round[i]);
-}
-
-printf("recv_displs: ");
-for (std::size_t i = 0; i < recv_displs_round.size(); ++i) {
-    printf("%d ", recv_displs_round[i]);
-}
-
-printf("partition: ");
-for (std::size_t i = 0; i < partition.size(); ++i) {
-    printf("%d ", partition[i]);
-}
-printf("\n");*/
-
         PL();
 
         PE(communication:exchange:all2all:communication);
@@ -414,19 +378,17 @@ printf("\n");*/
                                 comm);
         PL();
 
-
         PE(communication:exchange:all2all:post);
-        int total_spikes = 0;
         for (int rank = 0; rank < num_ranks; rank++) {
-            total_spikes += partition[rank + 1];
-            recv_buffer.insert(recv_buffer.begin() + total_spikes, 
-                               recv_buffer_round.begin() + (recv_displs_round[rank] / count_per_element), 
-                               recv_buffer_round.begin()+ (recv_displs_round[rank+1] / count_per_element));
-            partition[rank + 1] += recv_counts_round[rank] / count_per_element;
-            total_spikes += recv_counts_round[rank] / count_per_element;
+            std::size_t total_to_insert = recv_counts_round[rank] / count_per_element;
+            recv_buffer[rank].reserve(recv_buffer[rank].size() + total_to_insert);
+            recv_buffer[rank].insert(recv_buffer[rank].end(),
+                                     recv_buffer_round.begin() + (recv_displs_round[rank] / count_per_element),
+                                     recv_buffer_round.begin() + (recv_displs_round[rank+1] / count_per_element));
+            partition[rank+1] += total_to_insert;
         }
         cur_round++;
-	PL();
+	    PL();
     }
 
     PE(communication:exchange:all2all:partition);
@@ -434,8 +396,18 @@ printf("\n");*/
         partition[rank] += partition[rank - 1];
     }
     PL();
-    //printf("AAAA %ld %d\n", recv_buffer.size(), partition.back());
-    return gathered_type(std::move(recv_buffer), std::move(partition));
+
+    PE(communication:exchange:all2all:flat);
+    std::vector<T> recv_buffer_flat(partition.back());
+    std::size_t offset = 0;
+    for (int rank = 0; rank < num_ranks; ++rank) {
+        const auto& vec = recv_buffer[rank];
+        std::copy(vec.begin(), vec.end(), recv_buffer_flat.begin() + offset);
+        offset += vec.size();
+    }
+    PL();
+    //printf("AAAA %ld %d\n", recv_buffer_flat.size(), partition.back());
+    return gathered_type(std::move(recv_buffer_flat), std::move(partition));
 }
 
 /// AlltoAll of a gathered vector
