@@ -110,6 +110,37 @@ void make_remote_connections(const std::vector<cell_gid_type>& gids,
     PL();
 }
 
+struct Range {
+    int start;
+    int count;
+    int step;
+};
+
+template <typename T>
+std::vector<std::vector<Range>> compress_as_ranges(const std::vector<std::vector<T>>& nums) {
+    std::vector<std::vector<Range>> result(nums.size());
+
+    for (size_t rank = 0; rank < nums.size(); ++rank) {
+        const auto& vec = nums[rank];
+        size_t i = 0;
+
+        while (i < vec.size()) {
+            T start = vec[i];
+            T step = (i + 1 < vec.size()) ? vec[i + 1] - vec[i] : static_cast<T>(1);
+            size_t j = i + 1;
+
+            while (j < vec.size() && std::fabs(vec[j] - vec[j - 1] - step) < 1e-9) {
+                ++j;
+            }
+
+            result[rank].push_back({start, static_cast<int>(j - i), step});
+            i = j;
+        }
+    }
+
+    return result;
+}
+
 void communicator::update_connections(const recipe& rec,
                                       const domain_decomposition& dom_dec,
                                       const label_resolution_map& source_resolution_map,
@@ -229,6 +260,10 @@ void communicator::update_connections(const recipe& rec,
             domain_gids.end()
         );
     });
+    PL();
+    
+    PE(init:communicator:update:connections:sort_unique);
+    
     PL();
     
     PE(init:communicator:update:connections:gids);

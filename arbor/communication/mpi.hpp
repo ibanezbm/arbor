@@ -322,10 +322,22 @@ gathered_vector<T> all_to_all_with_partition(const gathered_vector<T>& values, M
                            comm);
 }
 
+template <typename T>
+std::vector<T> decompress_ranges(const std::vector<Range>& ranges) {
+    std::vector<double> result;
+    for (const auto& r : ranges) {
+        for (int i = 0; i < r.count; ++i) {
+            result.push_back(r.start + i * r.step);
+        }
+    }
+    return result;
+}
+
 /// AlltoAll of a distributed vector
 /// Retains the meta data (i.e. vector partition)
 template <typename T>
 gathered_vector<T> all_to_all_with_partition(const std::vector<std::vector<T>>& values, MPI_Comm comm) {
+    std::vector<std::vector<R>> ranges = compress_as_ranges(values);
     using traits = mpi_traits<T>;
     int num_ranks = values.size();
 
